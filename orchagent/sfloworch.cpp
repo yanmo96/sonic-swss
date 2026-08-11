@@ -107,6 +107,34 @@ bool SflowOrch::sflowUpdateRate(sai_object_id_t port_id, uint32_t rate)
     return true;
 }
 
+bool SflowOrch::isSflowSamplePacket(sai_object_id_t oid)
+{
+    for (auto& it : m_sflowRateSampleMap)
+    {
+        if (it.second.m_sample_id == oid)
+            return true;
+    }
+    return false;
+}
+
+bool SflowOrch::isSamplepacketFreeForSflow(sai_object_id_t port_id, sai_port_attr_t attr_id,
+                                           sai_object_id_t sample_id, const char* dir_name)
+{
+    sai_attribute_t check_attr;
+    check_attr.id = attr_id;
+    if (sai_port_api->get_port_attribute(port_id, 1, &check_attr) == SAI_STATUS_SUCCESS
+        && check_attr.value.oid != SAI_NULL_OBJECT_ID
+        && check_attr.value.oid != sample_id
+        && !isSflowSamplePacket(check_attr.value.oid))
+    {
+        SWSS_LOG_ERROR("Port %" PRIx64 " %s_SAMPLEPACKET_ENABLE already bound to "
+                       "OID 0x%" PRIx64 ", cannot bind sFlow",
+                       port_id, dir_name, check_attr.value.oid);
+        return false;
+    }
+    return true;
+}
+
 bool SflowOrch::sflowAddPort(sai_object_id_t sample_id, sai_object_id_t port_id, string direction)
 {
     sai_attribute_t attr;
@@ -115,7 +143,22 @@ bool SflowOrch::sflowAddPort(sai_object_id_t sample_id, sai_object_id_t port_id,
     SWSS_LOG_DEBUG("sflowAddPort  %" PRIx64 " portOid %" PRIx64 " dir %s",
                            sample_id, port_id, direction.c_str());
 
-    if (direction == "both" || direction == "rx")
+    bool need_ingress = (direction == "both" || direction == "rx");
+    bool need_egress  = (direction == "both" || direction == "tx");
+
+    // If the port's samplepacket is already owned by another (non-sFlow) feature, refuse to bind.
+    if (need_ingress &&
+        !isSamplepacketFreeForSflow(port_id, SAI_PORT_ATTR_INGRESS_SAMPLEPACKET_ENABLE, sample_id, "INGRESS"))
+    {
+        return false;
+    }
+    if (need_egress &&
+        !isSamplepacketFreeForSflow(port_id, SAI_PORT_ATTR_EGRESS_SAMPLEPACKET_ENABLE, sample_id, "EGRESS"))
+    {
+        return false;
+    }
+
+    if (need_ingress)
     {
         attr.id = SAI_PORT_ATTR_INGRESS_SAMPLEPACKET_ENABLE;
         attr.value.oid = sample_id;
@@ -132,7 +175,7 @@ bool SflowOrch::sflowAddPort(sai_object_id_t sample_id, sai_object_id_t port_id,
         }
     }
 
-    if (direction == "both" || direction == "tx")
+    if (need_egress)
     {
         attr.id = SAI_PORT_ATTR_EGRESS_SAMPLEPACKET_ENABLE;
         attr.value.oid = sample_id;
@@ -150,6 +193,7 @@ bool SflowOrch::sflowAddPort(sai_object_id_t sample_id, sai_object_id_t port_id,
     }
     return true;
 }
+
 
 bool SflowOrch::sflowDelPort(sai_object_id_t port_id, string direction)
 {
@@ -194,6 +238,7 @@ bool SflowOrch::sflowDelPort(sai_object_id_t port_id, string direction)
     }
     return true;
 }
+
 
 bool SflowOrch::sflowUpdateSampleDirection(sai_object_id_t port_id, string old_dir, string new_dir)
 {

@@ -41,6 +41,9 @@ private:
     bool sflowDestroySession(SflowSession &session);
     bool sflowAddPort(sai_object_id_t sample_id, sai_object_id_t port_id, string direction);
     bool sflowDelPort(sai_object_id_t port_id, string direction);
+    bool isSflowSamplePacket(sai_object_id_t oid);
+    bool isSamplepacketFreeForSflow(sai_object_id_t port_id, sai_port_attr_t attr_id,
+                                   sai_object_id_t expected_oid, const char *dir_label);
     void sflowStatusSet(Consumer &consumer);
     bool sflowUpdateRate(sai_object_id_t port_id, uint32_t rate);
     bool sflowUpdateSampleDirection(sai_object_id_t port_id, string old_dir, string new_dir);

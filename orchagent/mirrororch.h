@@ -28,6 +28,13 @@
  * Contains session data specified by user in config file
  * and data required for MAC address and port resolution
  */
+enum class MirrorBindDirection
+{
+    Ingress,
+    Egress
+};
+
+
 struct MirrorEntry
 {
     bool status;
@@ -150,6 +157,12 @@ private:
     // Sampled mirroring helpers
     bool createSamplePacket(const string& name, MirrorEntry& session);
     bool removeSamplePacket(const string& name, MirrorEntry& session);
+    bool setUnsetSampledMirrorOnPhyPort(sai_object_id_t phy_port_id,
+                                        const std::string& phy_port_alias,
+                                        bool set,
+                                        MirrorBindDirection direction,
+                                        sai_object_id_t sessionId,
+                                        sai_object_id_t samplepacketId);
 
     void doTask(Consumer& consumer);
 };
