@@ -1556,6 +1556,92 @@ bool MirrorOrch::removeSamplePacket(const string& name, MirrorEntry& session)
     return true;
 }
 
+bool MirrorOrch::setUnsetSampledMirrorOnPhyPort(sai_object_id_t phy_port_id,
+                                                const std::string& phy_port_alias,
+                                                bool set,
+                                                MirrorBindDirection direction,
+                                                sai_object_id_t sessionId,
+                                                sai_object_id_t samplepacketId)
+{
+    SWSS_LOG_ENTER();
+    sai_status_t status;
+
+    const bool ingress = (direction == MirrorBindDirection::Ingress);
+    const sai_port_attr_t samplepacketEnableAttrId = ingress ?
+        SAI_PORT_ATTR_INGRESS_SAMPLEPACKET_ENABLE :
+        SAI_PORT_ATTR_EGRESS_SAMPLEPACKET_ENABLE;
+    const sai_port_attr_t sampleMirrorSessionAttrId = ingress ?
+        SAI_PORT_ATTR_INGRESS_SAMPLE_MIRROR_SESSION :
+        SAI_PORT_ATTR_EGRESS_SAMPLE_MIRROR_SESSION;
+
+    sai_attribute_t sp_attr;
+    sp_attr.id = samplepacketEnableAttrId;
+    sp_attr.value.oid = set ? samplepacketId : SAI_NULL_OBJECT_ID;
+
+    sai_attribute_t mirror_attr;
+    mirror_attr.id = sampleMirrorSessionAttrId;
+    if (set)
+    {
+        mirror_attr.value.objlist.count = 1;
+        mirror_attr.value.objlist.list = &sessionId;
+    }
+    else
+    {
+        mirror_attr.value.objlist.count = 0;
+    }
+
+    if (set)
+    {
+        sai_attribute_t check_attr;
+        check_attr.id = samplepacketEnableAttrId;
+        if (sai_port_api->get_port_attribute(phy_port_id, 1, &check_attr) == SAI_STATUS_SUCCESS
+            && check_attr.value.oid != SAI_NULL_OBJECT_ID
+            && check_attr.value.oid != samplepacketId)
+        {
+            SWSS_LOG_ERROR("Port %s SAMPLEPACKET_ENABLE already bound to "
+                           "OID 0x%" PRIx64 ", cannot bind sampled mirror",
+                           phy_port_alias.c_str(), check_attr.value.oid);
+            return false;
+        }
+
+        status = sai_port_api->set_port_attribute(phy_port_id, &sp_attr);
+        if (status != SAI_STATUS_SUCCESS)
+        {
+            SWSS_LOG_ERROR("Failed to set SAMPLEPACKET_ENABLE on port %s, status %d",
+                           phy_port_alias.c_str(), status);
+            return false;
+        }
+        status = sai_port_api->set_port_attribute(phy_port_id, &mirror_attr);
+        if (status != SAI_STATUS_SUCCESS)
+        {
+            SWSS_LOG_ERROR("Failed to set SAMPLE_MIRROR_SESSION on port %s, status %d",
+                           phy_port_alias.c_str(), status);
+            sp_attr.value.oid = SAI_NULL_OBJECT_ID;
+            sai_port_api->set_port_attribute(phy_port_id, &sp_attr);
+            return false;
+        }
+    }
+    else
+    {
+        status = sai_port_api->set_port_attribute(phy_port_id, &mirror_attr);
+        if (status != SAI_STATUS_SUCCESS)
+        {
+            SWSS_LOG_ERROR("Failed to clear SAMPLE_MIRROR_SESSION on port %s, status %d",
+                           phy_port_alias.c_str(), status);
+            return false;
+        }
+        status = sai_port_api->set_port_attribute(phy_port_id, &sp_attr);
+        if (status != SAI_STATUS_SUCCESS)
+        {
+            SWSS_LOG_ERROR("Failed to clear SAMPLEPACKET_ENABLE on port %s, status %d",
+                           phy_port_alias.c_str(), status);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool MirrorOrch::updateSessionDstPort(const string& name, MirrorEntry& session)
 {
     SWSS_LOG_ENTER();
