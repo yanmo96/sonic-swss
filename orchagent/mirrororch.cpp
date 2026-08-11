@@ -537,11 +537,41 @@ task_process_status MirrorOrch::createEntry(const string& key, const vector<Fiel
         return task_process_status::task_invalid_entry;
     }
 
-    // Sampled mirroring requires RX direction
-    if (entry.sample_rate > 0 && entry.direction != MIRROR_RX_DIRECTION)
+    // Sampled mirroring requires an explicit direction (RX, TX, or BOTH).
+    if (entry.sample_rate > 0 && entry.direction.empty())
     {
-        SWSS_LOG_ERROR("Sampled mirroring requires RX direction for session %s",
+        SWSS_LOG_ERROR("Sampled mirroring requires RX, TX or BOTH direction for session %s",
                        key.c_str());
+        return task_process_status::task_invalid_entry;
+    }
+
+    // Platform capability: reject early if the per-direction sampled mirroring
+    // capability is not supported by the ASIC (from final swss#4502).
+    if (entry.sample_rate > 0)
+    {
+        bool needIngressSample = (entry.direction == MIRROR_RX_DIRECTION ||
+                                  entry.direction == MIRROR_BOTH_DIRECTION);
+        bool needEgressSample = (entry.direction == MIRROR_TX_DIRECTION ||
+                                 entry.direction == MIRROR_BOTH_DIRECTION);
+        if (needIngressSample && !m_switchOrch->isPortIngressSampleMirrorSupported())
+        {
+            SWSS_LOG_ERROR("Ingress sampled mirroring not supported on this platform, "
+                           "rejecting session %s", key.c_str());
+            return task_process_status::task_invalid_entry;
+        }
+        if (needEgressSample && !m_switchOrch->isPortEgressSampleMirrorSupported())
+        {
+            SWSS_LOG_ERROR("Egress sampled mirroring not supported on this platform, "
+                           "rejecting session %s", key.c_str());
+            return task_process_status::task_invalid_entry;
+        }
+    }
+
+    // Platform capability: reject early if samplepacket truncation is not supported
+    if (entry.truncate_size > 0 && !m_switchOrch->isSamplepacketTruncationSupported())
+    {
+        SWSS_LOG_ERROR("Samplepacket truncation not supported on this platform, "
+                       "rejecting session %s", key.c_str());
         return task_process_status::task_invalid_entry;
     }
 
@@ -1020,20 +1050,16 @@ bool MirrorOrch::setUnsetPortMirror(Port port,
 
     if (sample_rate > 0)
     {
-        if (!ingress)
-        {
-            SWSS_LOG_ERROR("Sampled mirroring on egress is not supported for port %s",
-                            port.m_alias.c_str());
-            return false;
-        }
-
-        // Sampled mirroring path: use SAMPLEPACKET_ENABLE + SAMPLE_MIRROR_SESSION
+        // Sampled mirroring path: SAMPLEPACKET_ENABLE + SAMPLE_MIRROR_SESSION
+        // Use ingress or egress SAI attrs based on bind direction (final #4502 behavior).
         sai_attribute_t sp_attr;
-        sp_attr.id = SAI_PORT_ATTR_INGRESS_SAMPLEPACKET_ENABLE;
+        sp_attr.id = ingress ? SAI_PORT_ATTR_INGRESS_SAMPLEPACKET_ENABLE
+                             : SAI_PORT_ATTR_EGRESS_SAMPLEPACKET_ENABLE;
         sp_attr.value.oid = set ? samplepacketId : SAI_NULL_OBJECT_ID;
 
         sai_attribute_t mirror_attr;
-        mirror_attr.id = SAI_PORT_ATTR_INGRESS_SAMPLE_MIRROR_SESSION;
+        mirror_attr.id = ingress ? SAI_PORT_ATTR_INGRESS_SAMPLE_MIRROR_SESSION
+                                 : SAI_PORT_ATTR_EGRESS_SAMPLE_MIRROR_SESSION;
         if (set)
         {
             mirror_attr.value.objlist.count = 1;
@@ -1048,12 +1074,12 @@ bool MirrorOrch::setUnsetPortMirror(Port port,
         if (set)
         {
             sai_attribute_t check_attr;
-            check_attr.id = SAI_PORT_ATTR_INGRESS_SAMPLEPACKET_ENABLE;
+            check_attr.id = sp_attr.id;
             if (sai_port_api->get_port_attribute(port.m_port_id, 1, &check_attr) == SAI_STATUS_SUCCESS
                 && check_attr.value.oid != SAI_NULL_OBJECT_ID
                 && check_attr.value.oid != samplepacketId)
             {
-                SWSS_LOG_ERROR("Port %s INGRESS_SAMPLEPACKET_ENABLE already bound to "
+                SWSS_LOG_ERROR("Port %s SAMPLEPACKET_ENABLE already bound to "
                                "OID 0x%" PRIx64 ", cannot bind sampled mirror",
                                port.m_alias.c_str(), check_attr.value.oid);
                 return false;
@@ -1357,17 +1383,10 @@ bool MirrorOrch::activateSession(const string& name, MirrorEntry& session)
 
     session.status = true;
 
-    // Create SamplePacket if sample_rate > 0
+    // Create SamplePacket if sample_rate > 0 (capability already verified in createEntry)
     if (session.sample_rate > 0)
     {
-        if (!m_switchOrch->isPortIngressSampleMirrorSupported())
-        {
-            SWSS_LOG_WARN("Sampled mirroring not supported on this platform, "
-                          "falling back to full mirror for session %s", name.c_str());
-            session.sample_rate = 0;
-            session.truncate_size = 0;
-        }
-        else if (!createSamplePacket(name, session))
+        if (!createSamplePacket(name, session))
         {
             SWSS_LOG_ERROR("Failed to create samplepacket, removing mirror session %s", name.c_str());
             sai_mirror_api->remove_mirror_session(session.sessionId);
