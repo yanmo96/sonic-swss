@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <utility>
 #include <exception>
+#include <strings.h>
 
 #include "sai_serialize.h"
 #include "orch.h"
@@ -625,25 +626,65 @@ task_process_status MirrorOrch::updateEntry(const string& key, const vector<Fiel
         const auto& field = fvField(fv);
         const auto& value = fvValue(fv);
 
-        if (field == MIRROR_SESSION_SAMPLE_RATE)
-        {
-            new_sample_rate = to_uint<uint32_t>(value);
-        }
-        else if (field == MIRROR_SESSION_TRUNCATE_SIZE)
-        {
-            new_truncate_size = to_uint<uint32_t>(value);
-        }
-        else if (field == MIRROR_SESSION_SRC_IP ||
-                 field == MIRROR_SESSION_DST_IP ||
-                 field == MIRROR_SESSION_GRE_TYPE ||
-                 field == MIRROR_SESSION_DSCP ||
-                 field == MIRROR_SESSION_TTL ||
-                 field == MIRROR_SESSION_QUEUE ||
-                 field == MIRROR_SESSION_SRC_PORT ||
-                 field == MIRROR_SESSION_DIRECTION ||
-                 field == MIRROR_SESSION_POLICER)
-        {
-            immutable_changed = true;
+        try {
+            if (field == MIRROR_SESSION_SAMPLE_RATE)
+            {
+                new_sample_rate = to_uint<uint32_t>(value);
+            }
+            else if (field == MIRROR_SESSION_TRUNCATE_SIZE)
+            {
+                new_truncate_size = to_uint<uint32_t>(value);
+            }
+            else if (field == MIRROR_SESSION_SRC_IP)
+            {
+                if (IpAddress(value) != session.srcIp)
+                    immutable_changed = true;
+            }
+            else if (field == MIRROR_SESSION_DST_IP)
+            {
+                if (IpAddress(value) != session.dstIp)
+                    immutable_changed = true;
+            }
+            else if (field == MIRROR_SESSION_GRE_TYPE)
+            {
+                if (to_uint<uint16_t>(value) != session.greType)
+                    immutable_changed = true;
+            }
+            else if (field == MIRROR_SESSION_DSCP)
+            {
+                if (to_uint<uint8_t>(value, MIRROR_SESSION_DSCP_MIN, MIRROR_SESSION_DSCP_MAX) != session.dscp)
+                    immutable_changed = true;
+            }
+            else if (field == MIRROR_SESSION_TTL)
+            {
+                if (to_uint<uint8_t>(value) != session.ttl)
+                    immutable_changed = true;
+            }
+            else if (field == MIRROR_SESSION_QUEUE)
+            {
+                if (to_uint<uint8_t>(value) != session.queue)
+                    immutable_changed = true;
+            }
+            else if (field == MIRROR_SESSION_SRC_PORT)
+            {
+                if (value != session.src_port)
+                    immutable_changed = true;
+            }
+            else if (field == MIRROR_SESSION_DIRECTION)
+            {
+                // Case-insensitive: CLI/YANG may differ in case from stored value
+                if (strcasecmp(value.c_str(), session.direction.c_str()) != 0)
+                    immutable_changed = true;
+            }
+            else if (field == MIRROR_SESSION_POLICER)
+            {
+                if (value != session.policer)
+                    immutable_changed = true;
+            }
+        } catch (const exception& e) {
+            SWSS_LOG_ERROR("Failed to parse session %s attribute %s during update: %s",
+                           key.c_str(), field.c_str(), e.what());
+            return task_process_status::task_invalid_entry;
         }
     }
 
@@ -1937,11 +1978,13 @@ void MirrorOrch::updateLagMember(const LagMemberUpdate& update)
         {
             if (session.direction == MIRROR_RX_DIRECTION  || session.direction == MIRROR_BOTH_DIRECTION)
             {
-                setUnsetPortMirror(update.member, true, update.add, session.sessionId);
+                setUnsetPortMirror(update.member, true, update.add, session.sessionId,
+                                   session.samplepacketId, session.sample_rate);
             }
             if (session.direction == MIRROR_TX_DIRECTION || session.direction == MIRROR_BOTH_DIRECTION)
             {
-                setUnsetPortMirror(update.member, false, update.add, session.sessionId);
+                setUnsetPortMirror(update.member, false, update.add, session.sessionId,
+                                   session.samplepacketId, session.sample_rate);
             }
         }
 
